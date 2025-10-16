@@ -29,7 +29,7 @@ class SemanticFinancialRAG:
         # Initialize Semchunk
         self.chunker = chunkerify(
             self.embedder,
-            max_chunk_size=1000,        # Large enough for tables/metrics
+            chunk_size=1000,        # Large enough for tables/metrics
             similarity_percentile=80,    # Adaptive splitting
             skip_window=2                # Look ahead for context
         )
