@@ -11,6 +11,7 @@ import os
 from typing import List, Dict
 import anthropic
 import traceback
+import numpy as np
 
 
 class SemanticFinancialRAG:
@@ -258,7 +259,8 @@ class SemanticFinancialRAG:
                         batch_size=32,  # Internal batch size for the encoder
                         show_progress_bar=False,
                         normalize_embeddings=True,
-                        convert_to_numpy=False
+                        convert_to_tensor=False,
+                        convert_to_numpy=True
                     )
                     
                     # Ensure embeddings are in list format
