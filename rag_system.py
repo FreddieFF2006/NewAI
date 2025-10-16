@@ -10,6 +10,11 @@ import traceback
 
 # File extraction libraries
 try:
+    import fitz  # pymupdf
+except ImportError:
+    fitz = None
+
+try:
     import pdfplumber
 except ImportError:
     pdfplumber = None
@@ -188,29 +193,68 @@ class DocumentRAGSystem:
             raise ValueError(f"Unsupported file type: {file_extension}")
     
     def _extract_from_pdf(self, file_path: str) -> str:
-        """Extract text from PDF file using pdfplumber."""
-        if pdfplumber is None:
-            raise ImportError("pdfplumber not installed. Install with: pip install pdfplumber")
+        """
+        Extract text from PDF file using multiple methods for maximum compatibility.
+        Tries pymupdf first (most reliable), then pdfplumber as fallback.
+        """
+        print(f"Extracting text from PDF: {file_path}")
         
-        try:
-            text = []
-            with pdfplumber.open(file_path) as pdf:
-                print(f"PDF has {len(pdf.pages)} pages")
-                for page_num, page in enumerate(pdf.pages, 1):
-                    page_text = page.extract_text()
-                    if page_text:
-                        text.append(f"Page {page_num}:\n{page_text}")
-                        print(f"Extracted {len(page_text)} characters from page {page_num}")
+        # Method 1: Try pymupdf (fitz) - most reliable
+        if fitz is not None:
+            try:
+                text = []
+                doc = fitz.open(file_path)
+                print(f"PDF has {len(doc)} pages (using pymupdf)")
+                
+                for page_num in range(len(doc)):
+                    page = doc[page_num]
+                    page_text = page.get_text()
+                    
+                    if page_text and page_text.strip():
+                        text.append(f"Page {page_num + 1}:\n{page_text}")
+                        print(f"Extracted {len(page_text)} characters from page {page_num + 1}")
                     else:
-                        print(f"Warning: No text on page {page_num}")
-            
-            extracted_text = "\n\n".join(text)
-            print(f"Total extracted: {len(extracted_text)} characters from PDF")
-            return extracted_text
-        except Exception as e:
-            print(f"Error reading PDF: {e}")
-            traceback.print_exc()
-            raise Exception(f"Error reading PDF: {e}")
+                        print(f"Warning: No text on page {page_num + 1}")
+                
+                doc.close()
+                
+                if text:
+                    extracted_text = "\n\n".join(text)
+                    print(f"SUCCESS with pymupdf: {len(extracted_text)} total characters")
+                    return extracted_text
+                else:
+                    print("pymupdf extracted no text, trying pdfplumber...")
+                    
+            except Exception as e:
+                print(f"pymupdf failed: {e}, trying pdfplumber...")
+        
+        # Method 2: Fallback to pdfplumber
+        if pdfplumber is not None:
+            try:
+                text = []
+                with pdfplumber.open(file_path) as pdf:
+                    print(f"PDF has {len(pdf.pages)} pages (using pdfplumber)")
+                    for page_num, page in enumerate(pdf.pages, 1):
+                        page_text = page.extract_text()
+                        if page_text:
+                            text.append(f"Page {page_num}:\n{page_text}")
+                            print(f"Extracted {len(page_text)} characters from page {page_num}")
+                        else:
+                            print(f"Warning: No text on page {page_num}")
+                
+                extracted_text = "\n\n".join(text)
+                if extracted_text:
+                    print(f"SUCCESS with pdfplumber: {len(extracted_text)} total characters")
+                    return extracted_text
+                else:
+                    print("pdfplumber extracted no text")
+                    
+            except Exception as e:
+                print(f"pdfplumber also failed: {e}")
+                traceback.print_exc()
+        
+        # If both methods failed
+        raise Exception("Unable to extract text from PDF. The PDF might be image-based or corrupted.")
     
     def _extract_from_docx(self, file_path: str) -> str:
         """Extract text from Word document."""
@@ -383,6 +427,9 @@ class DocumentRAGSystem:
         try:
             text = self._extract_from_pdf(pdf_path)
             print(f"Extracted {len(text)} characters from PDF")
+            # Show preview of extracted text for debugging
+            preview = text[:500].replace('\n', ' ')
+            print(f"Preview: {preview}...")
         except Exception as e:
             print(f"Error extracting text from PDF: {e}")
             traceback.print_exc()
@@ -407,7 +454,8 @@ class DocumentRAGSystem:
             return 0
         
         # Step 3: Create context-aware chunks (ending at sentences)
-        chunks = self._chunk_text(text, chunk_size=500, overlap=100)
+        # Using larger chunks to ensure we capture complete information
+        chunks = self._chunk_text(text, chunk_size=1000, overlap=200)
         print(f"Created {len(chunks)} sentence-based chunks from {file_name}")
         
         # Prepare points for Qdrant
@@ -588,8 +636,8 @@ class DocumentRAGSystem:
         
         if use_all_files:
             print("Retrieving chunks from ALL uploaded files...")
-            # Get representative chunks from every file
-            all_file_chunks = self.get_chunks_from_all_files(chunks_per_file=2)
+            # Get more chunks from every file for better coverage
+            all_file_chunks = self.get_chunks_from_all_files(chunks_per_file=5)
             
             # Add them to context
             for chunk in all_file_chunks:
