@@ -26,12 +26,10 @@ class SemanticFinancialRAG:
         print(f"Loading embedding model: {model_name}...")
         self.embedder = SentenceTransformer(model_name)
         
-        # Initialize Semchunk
+        # Initialize Semchunk with correct parameters
         self.chunker = chunkerify(
             self.embedder,
-            chunk_size=1000,        # Large enough for tables/metrics
-            similarity_percentile=80,    # Adaptive splitting
-            skip_window=2                # Look ahead for context
+            chunk_size=1000  # Maximum chunk size in tokens
         )
         
         # Initialize ChromaDB
@@ -377,5 +375,5 @@ if __name__ == "__main__":
     main()
 
 
-# Backward compatibility alias - ADD THIS AT THE VERY END
+# Backward compatibility alias
 DocumentRAGSystem = SemanticFinancialRAG
