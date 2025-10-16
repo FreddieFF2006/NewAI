@@ -10,9 +10,9 @@ import traceback
 
 # File extraction libraries
 try:
-    from PyPDF2 import PdfReader
+    import pdfplumber
 except ImportError:
-    PdfReader = None
+    pdfplumber = None
 
 try:
     from docx import Document
@@ -115,17 +115,28 @@ class DocumentRAGSystem:
             raise ValueError(f"Unsupported file type: {file_extension}")
     
     def _extract_from_pdf(self, file_path: str) -> str:
-        """Extract text from PDF file."""
-        if PdfReader is None:
-            raise ImportError("PyPDF2 not installed. Install with: pip install PyPDF2")
+        """Extract text from PDF file using pdfplumber."""
+        if pdfplumber is None:
+            raise ImportError("pdfplumber not installed. Install with: pip install pdfplumber")
         
         try:
-            reader = PdfReader(file_path)
             text = []
-            for page in reader.pages:
-                text.append(page.extract_text())
-            return "\n\n".join(text)
+            with pdfplumber.open(file_path) as pdf:
+                print(f"PDF has {len(pdf.pages)} pages")
+                for page_num, page in enumerate(pdf.pages, 1):
+                    page_text = page.extract_text()
+                    if page_text:
+                        text.append(f"Page {page_num}:\n{page_text}")
+                        print(f"Extracted {len(page_text)} characters from page {page_num}")
+                    else:
+                        print(f"Warning: No text on page {page_num}")
+            
+            extracted_text = "\n\n".join(text)
+            print(f"Total extracted: {len(extracted_text)} characters from PDF")
+            return extracted_text
         except Exception as e:
+            print(f"Error reading PDF: {e}")
+            traceback.print_exc()
             raise Exception(f"Error reading PDF: {e}")
     
     def _extract_from_docx(self, file_path: str) -> str:
