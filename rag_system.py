@@ -15,6 +15,14 @@ except ImportError:
     pdfplumber = None
 
 try:
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import inch
+except ImportError:
+    SimpleDocTemplate = None
+
+try:
     from docx import Document
 except ImportError:
     Document = None
@@ -30,6 +38,9 @@ try:
 except ImportError:
     openpyxl = None
     pd = None
+
+import tempfile
+import re
 
 # Load environment variables from .env file
 try:
@@ -88,6 +99,68 @@ class DocumentRAGSystem:
             print(f"Created collection '{self.collection_name}' with cosine distance")
         except Exception as e:
             print(f"Collection might already exist: {e}")
+    
+    def _convert_to_pdf(self, file_path: str) -> str:
+        """
+        Convert any file type to PDF format.
+        
+        Args:
+            file_path: Path to the original file
+            
+        Returns:
+            Path to the converted PDF file
+        """
+        file_extension = os.path.splitext(file_path)[1].lower()
+        
+        # If already a PDF, return as-is
+        if file_extension == '.pdf':
+            print(f"File is already PDF: {file_path}")
+            return file_path
+        
+        # Extract text from the file
+        print(f"Converting {file_extension} to PDF...")
+        if file_extension == '.docx':
+            text = self._extract_from_docx(file_path)
+        elif file_extension in ['.xlsx', '.xls']:
+            text = self._extract_from_excel(file_path)
+        elif file_extension == '.pptx':
+            text = self._extract_from_pptx(file_path)
+        elif file_extension in ['.txt', '.md']:
+            text = self._extract_from_txt(file_path)
+        else:
+            raise ValueError(f"Unsupported file type: {file_extension}")
+        
+        # Create a temporary PDF
+        temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+        pdf_path = temp_pdf.name
+        temp_pdf.close()
+        
+        # Convert text to PDF using reportlab
+        if SimpleDocTemplate is None:
+            raise ImportError("reportlab not installed. Install with: pip install reportlab")
+        
+        try:
+            doc = SimpleDocTemplate(pdf_path, pagesize=letter)
+            styles = getSampleStyleSheet()
+            story = []
+            
+            # Split text into paragraphs and add to PDF
+            for paragraph in text.split('\n'):
+                if paragraph.strip():
+                    # Escape HTML characters
+                    paragraph = paragraph.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    p = Paragraph(paragraph, styles['Normal'])
+                    story.append(p)
+                    story.append(Spacer(1, 0.2*inch))
+            
+            doc.build(story)
+            print(f"Converted to PDF: {pdf_path}")
+            return pdf_path
+            
+        except Exception as e:
+            print(f"Error converting to PDF: {e}")
+            traceback.print_exc()
+            raise Exception(f"Error converting to PDF: {e}")
     
     def _extract_text_from_file(self, file_path: str) -> str:
         """
@@ -205,34 +278,62 @@ class DocumentRAGSystem:
     
     def _chunk_text(self, text: str, chunk_size: int = 500, overlap: int = 100) -> List[str]:
         """
-        Split text into overlapping chunks for better context awareness.
+        Split text into overlapping chunks at sentence boundaries.
+        Ensures chunks end at full stops for context preservation.
         
         Args:
             text: Input text to chunk
-            chunk_size: Size of each chunk in characters
+            chunk_size: Target size of each chunk in characters
             overlap: Number of overlapping characters between chunks
             
         Returns:
             List of text chunks
         """
+        # Split text into sentences (at periods, question marks, exclamation marks)
+        sentence_pattern = r'(?<=[.!?])\s+'
+        sentences = re.split(sentence_pattern, text)
+        
         chunks = []
-        start = 0
+        current_chunk = []
+        current_size = 0
         
-        while start < len(text):
-            end = start + chunk_size
-            chunk = text[start:end]
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+                
+            sentence_size = len(sentence)
             
-            # Only add non-empty chunks
-            if chunk.strip():
-                chunks.append(chunk)
+            # If adding this sentence would exceed chunk_size, start a new chunk
+            if current_size + sentence_size > chunk_size and current_chunk:
+                # Save current chunk
+                chunk_text = ' '.join(current_chunk)
+                chunks.append(chunk_text)
+                
+                # Start new chunk with overlap
+                # Include last few sentences for context
+                overlap_sentences = []
+                overlap_size = 0
+                for sent in reversed(current_chunk):
+                    if overlap_size + len(sent) <= overlap:
+                        overlap_sentences.insert(0, sent)
+                        overlap_size += len(sent)
+                    else:
+                        break
+                
+                current_chunk = overlap_sentences
+                current_size = overlap_size
             
-            # Move start position with overlap
-            start = end - overlap
-            
-            # Break if we've reached the end
-            if end >= len(text):
-                break
+            # Add sentence to current chunk
+            current_chunk.append(sentence)
+            current_size += sentence_size
         
+        # Add the last chunk if it has content
+        if current_chunk:
+            chunk_text = ' '.join(current_chunk)
+            chunks.append(chunk_text)
+        
+        print(f"Created {len(chunks)} sentence-based chunks")
         return chunks
     
     def _embed_text(self, text: str) -> List[float]:
@@ -254,6 +355,7 @@ class DocumentRAGSystem:
     def upload_file(self, file_path: str, metadata: Dict = None) -> int:
         """
         Upload a file to the vector database.
+        Workflow: Convert to PDF → Extract text → Chunk at sentences → Embed
         Supports: .txt, .md, .pdf, .docx, .xlsx, .xls, .pptx
         
         Args:
@@ -267,23 +369,46 @@ class DocumentRAGSystem:
         file_extension = os.path.splitext(file_path)[1].lower()
         print(f"Processing file: {file_name} (type: {file_extension})")
         
-        # Extract text based on file type
+        # Step 1: Convert to PDF (if not already PDF)
+        pdf_path = None
         try:
-            text = self._extract_text_from_file(file_path)
-            print(f"Extracted {len(text)} characters from {file_name}")
+            pdf_path = self._convert_to_pdf(file_path)
+            print(f"Using PDF: {pdf_path}")
         except Exception as e:
-            print(f"Error extracting text from {file_name}: {e}")
-            import traceback
+            print(f"Error converting to PDF: {e}")
             traceback.print_exc()
             return 0
+        
+        # Step 2: Extract text from PDF
+        try:
+            text = self._extract_from_pdf(pdf_path)
+            print(f"Extracted {len(text)} characters from PDF")
+        except Exception as e:
+            print(f"Error extracting text from PDF: {e}")
+            traceback.print_exc()
+            # Clean up temp PDF if created
+            if pdf_path != file_path and os.path.exists(pdf_path):
+                try:
+                    os.remove(pdf_path)
+                except:
+                    pass
+            return 0
+        
+        # Clean up temporary PDF if we created one
+        if pdf_path != file_path and os.path.exists(pdf_path):
+            try:
+                os.remove(pdf_path)
+                print(f"Cleaned up temporary PDF: {pdf_path}")
+            except:
+                pass
         
         if not text or not text.strip():
             print(f"Warning: No text extracted from {file_name}")
             return 0
         
-        # Create chunks with overlap
+        # Step 3: Create context-aware chunks (ending at sentences)
         chunks = self._chunk_text(text, chunk_size=500, overlap=100)
-        print(f"Created {len(chunks)} overlapping chunks from {file_name}")
+        print(f"Created {len(chunks)} sentence-based chunks from {file_name}")
         
         # Prepare points for Qdrant
         points = []
