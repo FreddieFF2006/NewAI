@@ -6,6 +6,7 @@ from sentence_transformers import SentenceTransformer
 import uuid
 from typing import List, Dict
 import numpy as np
+import traceback
 
 # File extraction libraries
 try:
@@ -251,22 +252,27 @@ class DocumentRAGSystem:
         Returns:
             Number of chunks created
         """
-        print(f"Processing file: {file_path}")
+        file_name = os.path.basename(file_path)
+        file_extension = os.path.splitext(file_path)[1].lower()
+        print(f"Processing file: {file_name} (type: {file_extension})")
         
         # Extract text based on file type
         try:
             text = self._extract_text_from_file(file_path)
+            print(f"Extracted {len(text)} characters from {file_name}")
         except Exception as e:
-            print(f"Error reading file: {e}")
+            print(f"Error extracting text from {file_name}: {e}")
+            import traceback
+            traceback.print_exc()
             return 0
         
         if not text or not text.strip():
-            print(f"Warning: No text extracted from {file_path}")
+            print(f"Warning: No text extracted from {file_name}")
             return 0
         
         # Create chunks with overlap
         chunks = self._chunk_text(text, chunk_size=500, overlap=100)
-        print(f"Created {len(chunks)} overlapping chunks")
+        print(f"Created {len(chunks)} overlapping chunks from {file_name}")
         
         # Prepare points for Qdrant
         points = []

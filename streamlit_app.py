@@ -187,18 +187,24 @@ with col1:
                         try:
                             # Upload to RAG system
                             chunks = st.session_state.rag_system.upload_file(file_path)
-                            total_chunks += chunks
-                            processed_files.append({
-                                'name': uploaded_file.name,
-                                'chunks': chunks
-                            })
                             
-                            # Update uploaded files list
-                            if uploaded_file.name not in st.session_state.uploaded_files_list:
-                                st.session_state.uploaded_files_list.append(uploaded_file.name)
+                            if chunks == 0:
+                                st.warning(f"⚠️ {uploaded_file.name}: No text extracted or file is empty")
+                            else:
+                                total_chunks += chunks
+                                processed_files.append({
+                                    'name': uploaded_file.name,
+                                    'chunks': chunks
+                                })
+                                
+                                # Update uploaded files list
+                                if uploaded_file.name not in st.session_state.uploaded_files_list:
+                                    st.session_state.uploaded_files_list.append(uploaded_file.name)
                             
                         except Exception as e:
-                            st.error(f"Error processing {uploaded_file.name}: {e}")
+                            st.error(f"❌ Error processing {uploaded_file.name}: {str(e)}")
+                            import traceback
+                            st.error(traceback.format_exc())
                         
                         # Clean up temp file
                         try:
