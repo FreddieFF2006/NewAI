@@ -1,0 +1,18 @@
+
+        Claude API and Language Models
+        
+        Claude is an AI assistant created by Anthropic. It excels at:
+        - Natural conversations and question answering
+        - Analysis and reasoning tasks
+        - Code generation and debugging
+        - Creative writing and content creation
+        
+        The Claude API provides programmatic access to Claude's capabilities.
+        It uses a messages-based API similar to chat interfaces.
+        
+        RAG (Retrieval-Augmented Generation) combines:
+        1. Information retrieval from a knowledge base
+        2. Language model generation based on retrieved context
+        
+        This approach reduces hallucinations and provides source attribution.
+        
