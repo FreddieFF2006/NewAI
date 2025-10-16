@@ -27,8 +27,8 @@ class SemanticFinancialRAG:
         self.embedder = SentenceTransformer(model_name)
         
         # Simple chunking parameters
-        self.chunk_size = 1000
-        self.chunk_overlap = 200
+        self.chunk_size = 800  # Reduced from 1000 for better granularity
+        self.chunk_overlap = 150  # Proportionally reduced
         
         # Initialize ChromaDB
         print("Initializing ChromaDB...")
@@ -203,7 +203,7 @@ class SemanticFinancialRAG:
         return all_chunks
     
     def ingest_documents(self, pdf_paths: List[str], clear_existing: bool = False):
-        """Ingest multiple PDFs into ChromaDB"""
+        """Ingest multiple PDFs into ChromaDB with optimized batching"""
         if clear_existing:
             print("Clearing existing collection...")
             self.client.delete_collection(name=self.collection.name)
@@ -238,15 +238,34 @@ class SemanticFinancialRAG:
                     chunk_id = f"{chunk['source']}_page{chunk['page']}_{chunk['type']}_{i}"
                     ids.append(chunk_id)
                 
-                # Batch add
-                batch_size = 100
+                # Optimized batch processing
+                batch_size = 50  # Smaller batches for better progress feedback
+                total_batches = (len(documents) + batch_size - 1) // batch_size
+                
+                print(f"Generating embeddings for {len(documents)} chunks...")
+                
                 for i in range(0, len(documents), batch_size):
+                    batch_num = i // batch_size + 1
+                    print(f"  Processing batch {batch_num}/{total_batches}...", end='\r')
+                    
                     batch_docs = documents[i:i+batch_size]
                     batch_meta = metadatas[i:i+batch_size]
                     batch_ids = ids[i:i+batch_size]
                     
-                    embeddings = self.embedder.encode(batch_docs).tolist()
+                    # Optimized encoding with batching
+                    embeddings = self.embedder.encode(
+                        batch_docs,
+                        batch_size=32,  # Internal batch size for the encoder
+                        show_progress_bar=False,
+                        normalize_embeddings=True,
+                        convert_to_numpy=False
+                    )
                     
+                    # Ensure embeddings are in list format
+                    if not isinstance(embeddings, list):
+                        embeddings = embeddings.tolist()
+                    
+                    # Add to ChromaDB
                     self.collection.add(
                         documents=batch_docs,
                         metadatas=batch_meta,
@@ -254,16 +273,16 @@ class SemanticFinancialRAG:
                         embeddings=embeddings
                     )
                 
-                print(f"✓ Ingested {len(chunks)} chunks from {pdf_path}")
+                print(f"\n✓ Ingested {len(chunks)} chunks from {os.path.basename(pdf_path)}")
                 
             except Exception as e:
-                print(f"Error processing {pdf_path}: {e}")
+                print(f"\nError processing {pdf_path}: {e}")
                 traceback.print_exc()
         
-        print(f"\n✓ Total chunks: {self.collection.count()}")
+        print(f"\n✓ Total chunks in collection: {self.collection.count()}")
     
-    def retrieve(self, query: str, n_results: int = 20) -> List[Dict]:
-        """Retrieve relevant chunks"""
+    def retrieve(self, query: str, n_results: int = 50) -> List[Dict]:
+        """Retrieve relevant chunks - increased default to 50"""
         if not query or not query.strip():
             return []
         
@@ -293,8 +312,8 @@ class SemanticFinancialRAG:
             print(f"Error retrieving: {e}")
             return []
     
-    def generate_answer(self, query: str, n_results: int = 30) -> str:
-        """Generate answer using Claude"""
+    def generate_answer(self, query: str, n_results: int = 50) -> str:
+        """Generate answer using Claude - increased default to 50 chunks"""
         print(f"\nQuery: {query}")
         
         if not query or not query.strip():
