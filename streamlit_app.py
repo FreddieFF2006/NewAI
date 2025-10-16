@@ -7,7 +7,7 @@ import streamlit as st
 import os
 from pathlib import Path
 import tempfile
-from rag_system import DocumentRAGSystem
+from rag_system import SemanticFinancialRAG
 from dotenv import load_dotenv
 
 # Load environment variables
