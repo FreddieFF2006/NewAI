@@ -376,5 +376,6 @@ def main():
 if __name__ == "__main__":
     main()
 
-# Backward compatibility alias
+
+# Backward compatibility alias - ADD THIS AT THE VERY END
 DocumentRAGSystem = SemanticFinancialRAG
