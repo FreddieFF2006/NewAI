@@ -163,10 +163,10 @@ with col1:
         st.warning("⚠️ Please initialize the system first using the sidebar.")
     else:
         uploaded_files = st.file_uploader(
-            "Choose text files",
-            type=['txt', 'md'],
+            "Choose files to upload",
+            type=['txt', 'md', 'pdf', 'docx', 'xlsx', 'xls', 'pptx'],
             accept_multiple_files=True,
-            help="Upload one or more text files (.txt or .md)"
+            help="Upload documents: Text (.txt, .md), PDF (.pdf), Word (.docx), Excel (.xlsx, .xls), PowerPoint (.pptx)"
         )
         
         if uploaded_files:

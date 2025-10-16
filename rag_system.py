@@ -7,6 +7,37 @@ import uuid
 from typing import List, Dict
 import numpy as np
 
+# File extraction libraries
+try:
+    from PyPDF2 import PdfReader
+except ImportError:
+    PdfReader = None
+
+try:
+    from docx import Document
+except ImportError:
+    Document = None
+
+try:
+    from pptx import Presentation
+except ImportError:
+    Presentation = None
+
+try:
+    import openpyxl
+    import pandas as pd
+except ImportError:
+    openpyxl = None
+    pd = None
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # dotenv not installed, will use system environment variables
+    pass
+
 class DocumentRAGSystem:
     """
     RAG (Retrieval-Augmented Generation) system using:
@@ -56,6 +87,109 @@ class DocumentRAGSystem:
             print(f"Created collection '{self.collection_name}' with cosine distance")
         except Exception as e:
             print(f"Collection might already exist: {e}")
+    
+    def _extract_text_from_file(self, file_path: str) -> str:
+        """
+        Extract text from various file types.
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            Extracted text as string
+        """
+        file_extension = os.path.splitext(file_path)[1].lower()
+        
+        if file_extension == '.pdf':
+            return self._extract_from_pdf(file_path)
+        elif file_extension == '.docx':
+            return self._extract_from_docx(file_path)
+        elif file_extension in ['.xlsx', '.xls']:
+            return self._extract_from_excel(file_path)
+        elif file_extension == '.pptx':
+            return self._extract_from_pptx(file_path)
+        elif file_extension in ['.txt', '.md']:
+            return self._extract_from_txt(file_path)
+        else:
+            raise ValueError(f"Unsupported file type: {file_extension}")
+    
+    def _extract_from_pdf(self, file_path: str) -> str:
+        """Extract text from PDF file."""
+        if PdfReader is None:
+            raise ImportError("PyPDF2 not installed. Install with: pip install PyPDF2")
+        
+        try:
+            reader = PdfReader(file_path)
+            text = []
+            for page in reader.pages:
+                text.append(page.extract_text())
+            return "\n\n".join(text)
+        except Exception as e:
+            raise Exception(f"Error reading PDF: {e}")
+    
+    def _extract_from_docx(self, file_path: str) -> str:
+        """Extract text from Word document."""
+        if Document is None:
+            raise ImportError("python-docx not installed. Install with: pip install python-docx")
+        
+        try:
+            doc = Document(file_path)
+            text = []
+            for paragraph in doc.paragraphs:
+                text.append(paragraph.text)
+            return "\n".join(text)
+        except Exception as e:
+            raise Exception(f"Error reading DOCX: {e}")
+    
+    def _extract_from_excel(self, file_path: str) -> str:
+        """Extract text from Excel file."""
+        if pd is None or openpyxl is None:
+            raise ImportError("pandas and openpyxl not installed. Install with: pip install pandas openpyxl")
+        
+        try:
+            # Read all sheets
+            xls = pd.ExcelFile(file_path)
+            text = []
+            
+            for sheet_name in xls.sheet_names:
+                df = pd.read_excel(xls, sheet_name=sheet_name)
+                text.append(f"Sheet: {sheet_name}\n")
+                text.append(df.to_string())
+                text.append("\n\n")
+            
+            return "\n".join(text)
+        except Exception as e:
+            raise Exception(f"Error reading Excel: {e}")
+    
+    def _extract_from_pptx(self, file_path: str) -> str:
+        """Extract text from PowerPoint presentation."""
+        if Presentation is None:
+            raise ImportError("python-pptx not installed. Install with: pip install python-pptx")
+        
+        try:
+            prs = Presentation(file_path)
+            text = []
+            
+            for slide_num, slide in enumerate(prs.slides, 1):
+                text.append(f"Slide {slide_num}:\n")
+                for shape in slide.shapes:
+                    if hasattr(shape, "text"):
+                        text.append(shape.text)
+                text.append("\n")
+            
+            return "\n".join(text)
+        except Exception as e:
+            raise Exception(f"Error reading PPTX: {e}")
+    
+    def _extract_from_txt(self, file_path: str) -> str:
+        """Extract text from plain text file."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except UnicodeDecodeError:
+            # Try with different encoding
+            with open(file_path, 'r', encoding='latin-1') as f:
+                return f.read()
     
     def _chunk_text(self, text: str, chunk_size: int = 500, overlap: int = 100) -> List[str]:
         """
@@ -108,6 +242,7 @@ class DocumentRAGSystem:
     def upload_file(self, file_path: str, metadata: Dict = None) -> int:
         """
         Upload a file to the vector database.
+        Supports: .txt, .md, .pdf, .docx, .xlsx, .xls, .pptx
         
         Args:
             file_path: Path to the file to upload
@@ -118,12 +253,15 @@ class DocumentRAGSystem:
         """
         print(f"Processing file: {file_path}")
         
-        # Read file
+        # Extract text based on file type
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                text = f.read()
+            text = self._extract_text_from_file(file_path)
         except Exception as e:
             print(f"Error reading file: {e}")
+            return 0
+        
+        if not text or not text.strip():
+            print(f"Warning: No text extracted from {file_path}")
             return 0
         
         # Create chunks with overlap
@@ -308,12 +446,15 @@ Please provide a clear and accurate answer based on the context above. If the co
 def main():
     """Example usage of the RAG system."""
     
-    # Get API key from environment variable
+    # Get API key from environment variable (loaded from .env if available)
     claude_api_key = os.getenv("CLAUDE_API_KEY")
     
     if not claude_api_key:
         print("Error: Please set CLAUDE_API_KEY environment variable")
-        print("Example: export CLAUDE_API_KEY='your-api-key-here'")
+        print("\nOption 1 - Create .env file:")
+        print("  Create a file named '.env' with: CLAUDE_API_KEY=your-api-key-here")
+        print("\nOption 2 - Export environment variable:")
+        print("  export CLAUDE_API_KEY='your-api-key-here'")
         return
     
     # Initialize the system
