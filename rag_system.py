@@ -504,7 +504,48 @@ class DocumentRAGSystem:
         
         return results
     
-    def query(self, question: str, top_k: int = 5, max_tokens: int = 2000) -> Dict:
+    def get_chunks_from_all_files(self, chunks_per_file: int = 3) -> List[Dict]:
+        """
+        Retrieve representative chunks from ALL uploaded files.
+        
+        Args:
+            chunks_per_file: Number of chunks to get from each file
+            
+        Returns:
+            List of chunks with metadata
+        """
+        # Get all points from the collection
+        all_points = self.qdrant_client.scroll(
+            collection_name=self.collection_name,
+            limit=1000  # Adjust if you have more chunks
+        )[0]
+        
+        # Group chunks by file
+        files_dict = {}
+        for point in all_points:
+            file_path = point.payload["file_path"]
+            if file_path not in files_dict:
+                files_dict[file_path] = []
+            files_dict[file_path].append({
+                "text": point.payload["text"],
+                "file_path": file_path,
+                "chunk_index": point.payload["chunk_index"]
+            })
+        
+        # Get representative chunks from each file
+        all_file_chunks = []
+        for file_path, chunks in files_dict.items():
+            # Sort by chunk index to get chunks in order
+            chunks.sort(key=lambda x: x["chunk_index"])
+            # Take evenly distributed chunks
+            step = max(1, len(chunks) // chunks_per_file)
+            selected = chunks[::step][:chunks_per_file]
+            all_file_chunks.extend(selected)
+        
+        print(f"Retrieved {len(all_file_chunks)} chunks from {len(files_dict)} files")
+        return all_file_chunks
+    
+    def query(self, question: str, top_k: int = 5, max_tokens: int = 2000, use_all_files: bool = True) -> Dict:
         """
         Query the system with RAG: retrieve relevant chunks and generate answer with Claude.
         
@@ -516,9 +557,23 @@ class DocumentRAGSystem:
         Returns:
             Dictionary with answer and sources
         """
+    def query(self, question: str, top_k: int = 5, max_tokens: int = 2000, use_all_files: bool = True) -> Dict:
+        """
+        Query the system with RAG: retrieve relevant chunks and generate answer with Claude.
+        FORCES Claude to consider ALL uploaded files by including chunks from each.
+        
+        Args:
+            question: User's question
+            top_k: Number of most relevant chunks to retrieve
+            max_tokens: Maximum tokens for Claude's response
+            use_all_files: If True, includes chunks from ALL files (default: True)
+            
+        Returns:
+            Dictionary with answer and sources
+        """
         print(f"\nProcessing query: {question}")
         
-        # Search for relevant chunks
+        # Get most relevant chunks via search
         search_results = self.search(question, top_k=top_k)
         
         if not search_results:
@@ -527,28 +582,76 @@ class DocumentRAGSystem:
                 "sources": []
             }
         
-        # Prepare context from search results
+        # If use_all_files is True, also get chunks from ALL files
+        all_context_chunks = []
+        files_covered = set()
+        
+        if use_all_files:
+            print("Retrieving chunks from ALL uploaded files...")
+            # Get representative chunks from every file
+            all_file_chunks = self.get_chunks_from_all_files(chunks_per_file=2)
+            
+            # Add them to context
+            for chunk in all_file_chunks:
+                files_covered.add(chunk["file_path"])
+                all_context_chunks.append({
+                    "text": chunk["text"],
+                    "file_path": chunk["file_path"],
+                    "chunk_index": chunk["chunk_index"],
+                    "score": 0.0,  # No relevance score for forced chunks
+                    "forced": True
+                })
+        
+        # Add the most relevant chunks
+        for result in search_results:
+            files_covered.add(result["file_path"])
+            all_context_chunks.append({
+                "text": result["text"],
+                "file_path": result["file_path"],
+                "chunk_index": result["chunk_index"],
+                "score": result["score"],
+                "forced": False
+            })
+        
+        print(f"Total context: {len(all_context_chunks)} chunks from {len(files_covered)} files")
+        
+        # Prepare context from all chunks
         context_parts = []
-        for idx, result in enumerate(search_results, 1):
+        context_parts.append("=" * 80)
+        context_parts.append("MANDATORY: You MUST reference ALL of the following documents in your answer.")
+        context_parts.append(f"Documents included: {len(files_covered)} files")
+        context_parts.append("=" * 80)
+        context_parts.append("")
+        
+        for idx, chunk in enumerate(all_context_chunks, 1):
+            file_name = os.path.basename(chunk["file_path"])
+            chunk_type = "RELEVANT" if not chunk.get("forced", False) else "CONTEXT"
+            score_info = f", relevance: {chunk['score']:.3f}" if chunk["score"] > 0 else ""
+            
             context_parts.append(
-                f"[Source {idx}] (from {result['file_path']}, chunk {result['chunk_index']}, "
-                f"relevance: {result['score']:.3f}):\n{result['text']}\n"
+                f"[{chunk_type} CHUNK {idx}] (from {file_name}, chunk {chunk['chunk_index']}{score_info}):\n{chunk['text']}\n"
             )
         
         context = "\n".join(context_parts)
         
-        # Create prompt for Claude
-        prompt = f"""You are a helpful AI assistant. Answer the following question based on the provided context.
+        # Create prompt for Claude with strict instructions
+        prompt = f"""You are a comprehensive AI analyst. You MUST analyze and reference ALL the provided documents in your answer.
 
-Context from documents:
 {context}
 
 Question: {question}
 
-Please provide a clear and accurate answer based on the context above. If the context doesn't contain enough information to fully answer the question, please say so."""
+CRITICAL INSTRUCTIONS:
+1. You MUST reference information from ALL {len(files_covered)} documents provided above
+2. Compare and contrast information across different documents
+3. Cite specific documents when making claims (use document names)
+4. If documents contain conflicting information, mention this
+5. Provide a comprehensive answer that synthesizes information from ALL sources
+
+Your answer MUST demonstrate that you have read and considered every single document provided."""
 
         # Query Claude
-        print("Generating answer with Claude...")
+        print("Generating comprehensive answer with Claude...")
         message = self.claude_client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=max_tokens,
@@ -559,20 +662,22 @@ Please provide a clear and accurate answer based on the context above. If the co
         
         answer = message.content[0].text
         
-        # Prepare sources
+        # Prepare sources (including all files)
         sources = [
             {
-                "file": result["file_path"],
-                "chunk": result["chunk_index"],
-                "score": result["score"],
-                "text_preview": result["text"][:200] + "..."
+                "file": chunk["file_path"],
+                "chunk": chunk["chunk_index"],
+                "score": chunk["score"],
+                "text_preview": chunk["text"][:200] + "...",
+                "forced": chunk.get("forced", False)
             }
-            for result in search_results
+            for chunk in all_context_chunks
         ]
         
         return {
             "answer": answer,
-            "sources": sources
+            "sources": sources,
+            "files_referenced": len(files_covered)
         }
     
     def get_collection_stats(self) -> Dict:

@@ -1,3 +1,6 @@
+Y
+Download
+
 """
 Streamlit Web Interface for RAG System
 A user-friendly web app for document upload and AI-powered querying
@@ -258,23 +261,27 @@ with col2:
             st.rerun()
         
         if ask_button and query:
-            with st.spinner("🤔 Thinking..."):
+            with st.spinner("🤔 Analyzing ALL documents..."):
                 try:
                     result = st.session_state.rag_system.query(
                         query, 
                         top_k=top_k,
-                        max_tokens=max_tokens
+                        max_tokens=max_tokens,
+                        use_all_files=True  # Force reading all files
                     )
                     
                     # Add to chat history
                     st.session_state.chat_history.append({
                         'question': query,
                         'answer': result['answer'],
-                        'sources': result['sources']
+                        'sources': result['sources'],
+                        'files_referenced': result.get('files_referenced', len(result['sources']))
                     })
                     
                 except Exception as e:
                     st.error(f"Error processing query: {e}")
+                    import traceback
+                    st.error(traceback.format_exc())
 
 # Display chat history
 if st.session_state.chat_history:
@@ -287,13 +294,20 @@ if st.session_state.chat_history:
             st.info(chat['question'])
             
             st.markdown(f"### 🤖 Answer")
+            files_ref = chat.get('files_referenced', 0)
+            if files_ref > 0:
+                st.caption(f"📊 Referenced {files_ref} documents")
             st.success(chat['answer'])
             
             # Show sources in expander
-            with st.expander(f"📚 View Sources ({len(chat['sources'])} sources)"):
+            relevant_sources = [s for s in chat['sources'] if not s.get('forced', False)]
+            all_sources = chat['sources']
+            with st.expander(f"📚 View Sources ({len(relevant_sources)} most relevant, {len(all_sources)} total)"):
                 for i, source in enumerate(chat['sources'], 1):
-                    st.markdown(f"**Source {i}** (Relevance: {source['score']:.3f})")
-                    st.markdown(f"*File:* `{source['file']}`")
+                    source_type = "🎯 RELEVANT" if not source.get('forced', False) else "📄 CONTEXT"
+                    score_display = f" - Score: {source['score']:.3f}" if source['score'] > 0 else ""
+                    st.markdown(f"**{source_type} Source {i}**{score_display}")
+                    st.markdown(f"*File:* `{os.path.basename(source['file'])}`")
                     st.markdown(f"*Chunk:* {source['chunk']}")
                     st.text(source['text_preview'])
                     st.markdown("---")
