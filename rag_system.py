@@ -241,6 +241,20 @@ class SemanticFinancialRAG:
                 name=self.collection_name,
                 metadata={"hnsw:space": "cosine"}
             )
+        else:
+            # Verify collection exists and is accessible
+            try:
+                self.collection.count()
+            except Exception as e:
+                print(f"Collection not accessible, recreating: {e}")
+                try:
+                    self.client.delete_collection(name=self.collection_name)
+                except:
+                    pass
+                self.collection = self.client.create_collection(
+                    name=self.collection_name,
+                    metadata={"hnsw:space": "cosine"}
+                )
         
         for pdf_path in pdf_paths:
             if not os.path.exists(pdf_path):
@@ -301,13 +315,41 @@ class SemanticFinancialRAG:
                                 for emb in embeddings
                             ]
                     
+                    # Verify collection before adding
+                    try:
+                        self.collection.count()
+                    except Exception as e:
+                        print(f"\nCollection lost during processing, recreating: {e}")
+                        try:
+                            self.collection = self.client.get_collection(name=self.collection_name)
+                        except:
+                            self.collection = self.client.create_collection(
+                                name=self.collection_name,
+                                metadata={"hnsw:space": "cosine"}
+                            )
+                    
                     # Add to ChromaDB
-                    self.collection.add(
-                        documents=batch_docs,
-                        metadatas=batch_meta,
-                        ids=batch_ids,
-                        embeddings=embeddings
-                    )
+                    try:
+                        self.collection.add(
+                            documents=batch_docs,
+                            metadatas=batch_meta,
+                            ids=batch_ids,
+                            embeddings=embeddings
+                        )
+                    except Exception as e:
+                        print(f"\nError adding batch to collection: {e}")
+                        # Try to get fresh reference
+                        try:
+                            self.collection = self.client.get_collection(name=self.collection_name)
+                            self.collection.add(
+                                documents=batch_docs,
+                                metadatas=batch_meta,
+                                ids=batch_ids,
+                                embeddings=embeddings
+                            )
+                        except Exception as retry_error:
+                            print(f"Failed to add batch even after retry: {retry_error}")
+                            raise
                 
                 print(f"\n✓ Ingested {len(chunks)} chunks from {os.path.basename(pdf_path)}")
                 

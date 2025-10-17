@@ -572,24 +572,33 @@ with st.sidebar:
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Clear Data", type="secondary", use_container_width=True):
-            if st.session_state.rag_system:
-                try:
-                    st.session_state.rag_system.client.delete_collection(
-                        st.session_state.rag_system.collection_name
-                    )
-                    # Recreate immediately
+            try:
+                # Delete and recreate
+                if st.session_state.rag_system:
+                    try:
+                        st.session_state.rag_system.client.delete_collection(
+                            st.session_state.rag_system.collection_name
+                        )
+                    except:
+                        pass
+                    
+                    # Create fresh collection
                     st.session_state.rag_system.collection = st.session_state.rag_system.client.create_collection(
                         name=st.session_state.rag_system.collection_name,
                         metadata={"hnsw:space": "cosine"}
                     )
-                    st.success("Data cleared")
-                except Exception as e:
-                    st.error(f"Error: {e}")
-            
-            st.session_state.uploaded_files_list = []
-            st.session_state.chat_history = []
-            st.session_state.current_chat_index = None
-            st.rerun()
+                
+                st.session_state.uploaded_files_list = []
+                st.session_state.chat_history = []
+                st.session_state.current_chat_index = None
+                st.success("Data cleared successfully")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error clearing data: {e}")
+                # Force restart on error
+                initialize_rag_system.clear()
+                st.session_state.rag_system = None
+                st.rerun()
     
     with col2:
         if st.button("Restart", use_container_width=True):
@@ -659,6 +668,8 @@ if st.session_state.show_upload:
                 
             except Exception as e:
                 st.error(f"Processing error: {str(e)}")
+                with st.expander("Error details"):
+                    st.code(traceback.format_exc())
             finally:
                 for _, file_path in file_paths:
                     try:
