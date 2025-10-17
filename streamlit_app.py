@@ -42,21 +42,20 @@ if 'uploaded_files_list' not in st.session_state:
     st.session_state.uploaded_files_list = []
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
-if 'initialization_error' not in st.session_state:
-    st.session_state.initialization_error = None
 
 
 @st.cache_resource
 def initialize_rag_system():
-    """Initialize the RAG system with API key."""
+    """Initialize the RAG system - API key should be in secrets."""
     try:
-        api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
+        # API key should be in Streamlit secrets or environment
+        api_key = os.getenv("ANTHROPIC_API_KEY")
         
         if not api_key:
             try:
-                api_key = st.secrets.get("ANTHROPIC_API_KEY") or st.secrets.get("CLAUDE_API_KEY")
+                api_key = st.secrets["ANTHROPIC_API_KEY"]
             except:
-                return None, "No API key found. Set ANTHROPIC_API_KEY in environment or secrets."
+                return None, "ANTHROPIC_API_KEY not found in secrets. Please add it in Streamlit settings."
         
         if not api_key:
             return None, "API key is empty"
@@ -91,66 +90,41 @@ def save_uploaded_file(uploaded_file):
         return None, f"Error saving file: {str(e)}"
 
 
+# Auto-initialize on first load
+if st.session_state.rag_system is None:
+    with st.spinner("Initializing system..."):
+        rag, error = initialize_rag_system()
+        if rag:
+            st.session_state.rag_system = rag
+            st.success("✅ System initialized!", icon="🚀")
+        else:
+            st.error(f"❌ Initialization failed: {error}")
+            st.stop()
+
 # Header
 st.title("🤖 AI Document Assistant")
 st.markdown("### Upload documents and ask questions - powered by Claude AI")
 
 # Sidebar
 with st.sidebar:
-    st.header("⚙️ Configuration")
-    
-    # API Key input
-    api_key_input = st.text_input(
-        "Anthropic API Key (optional)", 
-        type="password",
-        help="Enter API key or set ANTHROPIC_API_KEY in .env"
-    )
-    
-    if api_key_input:
-        os.environ["ANTHROPIC_API_KEY"] = api_key_input
-    
-    # Initialize button
-    if st.button("🚀 Initialize System", type="primary"):
-        with st.spinner("Initializing..."):
-            initialize_rag_system.clear()
-            rag, error = initialize_rag_system()
-            
-            if rag:
-                st.session_state.rag_system = rag
-                st.session_state.initialization_error = None
-                st.success("✅ System initialized!")
-                st.rerun()  # Force rerun to update slider
-            else:
-                st.session_state.rag_system = None
-                st.session_state.initialization_error = error
-                st.error(f"❌ Failed to initialize")
-    
-    # Show error details
-    if st.session_state.initialization_error:
-        with st.expander("❌ Error Details"):
-            st.code(st.session_state.initialization_error)
-    
-    st.markdown("---")
-    
     # System status
-    st.header("📊 Status")
+    st.header("📊 System Status")
     if st.session_state.rag_system:
         st.success("🟢 Active")
         try:
             stats = st.session_state.rag_system.get_stats()
-            st.metric("Chunks", stats.get('total_chunks', 0))
-            st.metric("Documents", len(st.session_state.uploaded_files_list))
+            st.metric("Total Chunks", stats.get('total_chunks', 0))
+            st.metric("Documents Uploaded", len(st.session_state.uploaded_files_list))
         except:
             pass
     else:
-        st.warning("🟡 Not Initialized")
+        st.error("🔴 Not Initialized")
     
     st.markdown("---")
     
     # Settings
     st.header("🎛️ Settings")
     
-    # UPDATED SLIDER - THIS IS THE KEY CHANGE
     n_results = st.slider(
         "Number of chunks to retrieve",
         min_value=20,
@@ -163,45 +137,52 @@ with st.sidebar:
     st.markdown("---")
     
     # Clear button
-    if st.button("🗑️ Clear All"):
+    if st.button("🗑️ Clear All Data", type="secondary"):
         if st.session_state.rag_system:
             try:
                 st.session_state.rag_system.client.delete_collection(
                     st.session_state.rag_system.collection.name
                 )
-            except:
-                pass
+                st.success("Collection cleared!")
+            except Exception as e:
+                st.error(f"Error clearing: {e}")
         
+        st.session_state.uploaded_files_list = []
+        st.session_state.chat_history = []
+        st.rerun()
+    
+    # Restart system button
+    if st.button("🔄 Restart System"):
         initialize_rag_system.clear()
         st.session_state.rag_system = None
         st.session_state.uploaded_files_list = []
         st.session_state.chat_history = []
-        st.session_state.initialization_error = None
-        st.success("Cleared!")
         st.rerun()
 
 # Main area
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    st.header("📤 Upload")
+    st.header("📤 Upload Documents")
     
     if not st.session_state.rag_system:
-        st.warning("⚠️ Initialize system first")
+        st.warning("⚠️ System not initialized")
     else:
         uploaded_files = st.file_uploader(
             "Choose PDF files",
             type=['pdf'],
-            accept_multiple_files=True
+            accept_multiple_files=True,
+            help="Upload financial reports, earnings documents, etc."
         )
         
-        if uploaded_files and st.button("📥 Process", type="primary"):
+        if uploaded_files and st.button("📥 Process Documents", type="primary"):
             progress_bar = st.progress(0)
             status_text = st.empty()
             
             file_paths = []
             errors = []
             
+            # Save files
             for uploaded_file in uploaded_files:
                 file_path, error = save_uploaded_file(uploaded_file)
                 if file_path:
@@ -230,13 +211,15 @@ with col1:
                     status_text.empty()
                     progress_bar.empty()
                     
-                    st.success(f"✅ Processed {len(file_paths)} files! Total: {total} chunks")
+                    st.success(f"✅ Successfully processed {len(file_paths)} files!")
+                    st.info(f"📊 Total chunks in database: {total}")
                     
                 except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
-                    with st.expander("Details"):
+                    st.error(f"❌ Processing error: {str(e)}")
+                    with st.expander("Error Details"):
                         st.code(traceback.format_exc())
                 finally:
+                    # Cleanup temp files
                     for _, file_path in file_paths:
                         try:
                             os.remove(file_path)
@@ -244,41 +227,40 @@ with col1:
                         except:
                             pass
         
+        # Show uploaded files
         if st.session_state.uploaded_files_list:
-            st.markdown("### 📚 Uploaded")
-            for file_name in st.session_state.uploaded_files_list:
-                st.write(f"✓ {file_name}")
+            st.markdown("### 📚 Uploaded Documents")
+            for idx, file_name in enumerate(st.session_state.uploaded_files_list, 1):
+                st.write(f"{idx}. {file_name}")
 
 with col2:
-    st.header("💬 Ask")
+    st.header("💬 Ask Questions")
     
     if not st.session_state.rag_system:
-        st.warning("⚠️ Initialize system first")
+        st.warning("⚠️ System not initialized")
     elif not st.session_state.uploaded_files_list:
-        st.info("ℹ️ Upload documents first")
+        st.info("ℹ️ Upload some documents to start asking questions")
     else:
         query = st.text_area(
             "Your question:",
             height=100,
-            placeholder="What would you like to know?"
+            placeholder="e.g., What is the employee headcount for all companies?"
         )
         
         col_btn1, col_btn2 = st.columns([1, 4])
         with col_btn1:
             ask_button = st.button("🔍 Ask", type="primary")
         with col_btn2:
-            clear_chat = st.button("🗑️ Clear")
+            clear_chat = st.button("🗑️ Clear Chat")
         
         if clear_chat:
             st.session_state.chat_history = []
-            st.success("Cleared!")
+            st.success("Chat cleared!")
             st.rerun()
         
         if ask_button and query and query.strip():
-            with st.spinner("🤔 Thinking..."):
+            with st.spinner(f"🤔 Analyzing {n_results} chunks..."):
                 try:
-                    st.info(f"📊 Retrieving {n_results} chunks...")
-                    
                     answer = st.session_state.rag_system.generate_answer(
                         query, 
                         n_results=n_results
@@ -293,15 +275,17 @@ with col2:
                         'n_results': n_results
                     })
                     
+                    st.rerun()
+                    
                 except Exception as e:
-                    st.error(f"Error: {str(e)}")
-                    with st.expander("Details"):
+                    st.error(f"❌ Error: {str(e)}")
+                    with st.expander("Error Details"):
                         st.code(traceback.format_exc())
 
 # Chat history
 if st.session_state.chat_history:
     st.markdown("---")
-    st.header("💬 History")
+    st.header("💬 Conversation History")
     
     for idx, chat in enumerate(reversed(st.session_state.chat_history)):
         with st.container():
@@ -310,22 +294,35 @@ if st.session_state.chat_history:
             
             st.markdown(f"### 🤖 Answer")
             chunks_used = chat.get('n_results', 'Unknown')
-            st.caption(f"📊 Used {chunks_used} chunks")
+            st.caption(f"📊 Retrieved {chunks_used} chunks from {len(set(s['metadata'].get('source', '?') for s in chat.get('sources', [])))} documents")
             st.success(chat['answer'])
             
+            # Sources
             if chat.get('sources'):
-                with st.expander(f"📚 Sources ({len(chat['sources'])})"):
-                    for i, source in enumerate(chat['sources'][:20], 1):  # Show first 20
-                        try:
-                            st.markdown(f"**Source {i}**")
-                            st.markdown(f"*File:* `{source['metadata'].get('source', '?')}`")
-                            st.markdown(f"*Page:* {source['metadata'].get('page', '?')}")
-                            st.markdown(f"*Distance:* {source.get('distance', 0):.4f}")
-                            text = source.get('text', '')
-                            st.text(text[:300] + "..." if len(text) > 300 else text)
-                            st.markdown("---")
-                        except:
-                            pass
+                with st.expander(f"📚 View {len(chat['sources'])} Source Chunks"):
+                    # Group by source
+                    sources_by_file = {}
+                    for source in chat['sources']:
+                        file_name = source['metadata'].get('source', 'Unknown')
+                        if file_name not in sources_by_file:
+                            sources_by_file[file_name] = []
+                        sources_by_file[file_name].append(source)
+                    
+                    for file_name, sources in sources_by_file.items():
+                        st.markdown(f"**📄 {file_name}** ({len(sources)} chunks)")
+                        
+                        for i, source in enumerate(sources[:10], 1):  # Show first 10 per file
+                            try:
+                                page = source['metadata'].get('page', '?')
+                                chunk_type = source['metadata'].get('type', '?')
+                                distance = source.get('distance', 0)
+                                text = source.get('text', '')
+                                
+                                st.markdown(f"*Chunk {i} - Page {page} ({chunk_type}) - Distance: {distance:.3f}*")
+                                st.text(text[:250] + "..." if len(text) > 250 else text)
+                                st.markdown("---")
+                            except:
+                                pass
             
             st.markdown("---")
 
@@ -333,6 +330,7 @@ if st.session_state.chat_history:
 st.markdown("---")
 st.markdown("""
     <div style='text-align: center; color: #666;'>
-        <p>Powered by Claude AI & ChromaDB | Retrieves up to 200 chunks</p>
+        <p>🤖 Powered by Claude Sonnet 4 & ChromaDB | 🔍 Hybrid Search (Semantic + Keyword)</p>
+        <p>📊 Retrieves up to 200 chunks for comprehensive answers</p>
     </div>
 """, unsafe_allow_html=True)
