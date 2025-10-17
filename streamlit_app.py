@@ -464,7 +464,7 @@ def initialize_rag_system():
         os.environ["ANTHROPIC_API_KEY"] = api_key
         
         rag = SemanticFinancialRAG(
-            model_name="intfloat/e5-large-v2",
+            model_name="all-MiniLM-L6-v2",
             collection_name="financial_documents",
             persist_directory="./chroma_db"
         )
