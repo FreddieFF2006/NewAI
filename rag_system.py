@@ -14,7 +14,7 @@ import traceback
 import warnings
 import logging
 
-warnings.filterwarnings('ignore', message='.*FontBBox.*')
+
 logging.getLogger('pdfminer').setLevel(logging.ERROR)
 logging.getLogger('pdfplumber').setLevel(logging.ERROR)
 
