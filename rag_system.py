@@ -22,7 +22,7 @@ logging.getLogger('pdfplumber').setLevel(logging.ERROR)
 class SemanticFinancialRAG:
     def __init__(
         self,
-        model_name: str = "intfloat/e5-large-v2",
+        model_name: str = "all-MiniLM-L6-v2",
         collection_name: str = "financial_documents",
         persist_directory: str = "./chroma_db"
     ):
