@@ -11,7 +11,6 @@ import os
 from typing import List, Dict
 import anthropic
 import traceback
-import numpy as np
 
 
 class SemanticFinancialRAG:
@@ -27,9 +26,9 @@ class SemanticFinancialRAG:
         print(f"Loading embedding model: {model_name}...")
         self.embedder = SentenceTransformer(model_name)
         
-        # Simple chunking parameters
-        self.chunk_size = 800  # Reduced from 1000 for better granularity
-        self.chunk_overlap = 150  # Proportionally reduced
+        # Simple chunking parameters - smaller for better granularity
+        self.chunk_size = 500  # Reduced from 800
+        self.chunk_overlap = 100  # Reduced from 150
         
         # Initialize ChromaDB
         print("Initializing ChromaDB...")
@@ -240,7 +239,7 @@ class SemanticFinancialRAG:
                     ids.append(chunk_id)
                 
                 # Optimized batch processing
-                batch_size = 50  # Smaller batches for better progress feedback
+                batch_size = 50
                 total_batches = (len(documents) + batch_size - 1) // batch_size
                 
                 print(f"Generating embeddings for {len(documents)} chunks...")
@@ -253,19 +252,24 @@ class SemanticFinancialRAG:
                     batch_meta = metadatas[i:i+batch_size]
                     batch_ids = ids[i:i+batch_size]
                     
-                    # Optimized encoding with batching
+                    # Generate embeddings
                     embeddings = self.embedder.encode(
                         batch_docs,
-                        batch_size=32,  # Internal batch size for the encoder
+                        batch_size=32,
                         show_progress_bar=False,
                         normalize_embeddings=True,
-                        convert_to_tensor=False,
-                        convert_to_numpy=True
+                        convert_to_tensor=False
                     )
                     
                     # Ensure embeddings are in list format
                     if not isinstance(embeddings, list):
-                        embeddings = embeddings.tolist()
+                        if hasattr(embeddings, 'tolist'):
+                            embeddings = embeddings.tolist()
+                        else:
+                            embeddings = [
+                                emb.tolist() if hasattr(emb, 'tolist') else list(emb) 
+                                for emb in embeddings
+                            ]
                     
                     # Add to ChromaDB
                     self.collection.add(
@@ -283,17 +287,107 @@ class SemanticFinancialRAG:
         
         print(f"\n✓ Total chunks in collection: {self.collection.count()}")
     
-    def retrieve(self, query: str, n_results: int = 50) -> List[Dict]:
-        """Retrieve relevant chunks - increased default to 50"""
+    def search_all_files(self, keyword: str) -> List[Dict]:
+        """Search for a specific keyword across all files"""
+        try:
+            all_results = self.collection.get(
+                include=['documents', 'metadatas']
+            )
+            
+            matches = []
+            for i, doc in enumerate(all_results['documents']):
+                if keyword.lower() in doc.lower():
+                    matches.append({
+                        'text': doc,
+                        'metadata': all_results['metadatas'][i],
+                        'distance': 0.0
+                    })
+            
+            print(f"Found {len(matches)} chunks containing '{keyword}'")
+            return matches
+            
+        except Exception as e:
+            print(f"Error searching: {e}")
+            return []
+    
+    def retrieve_with_keywords(self, query: str, n_results: int = 100) -> List[Dict]:
+        """Retrieve using both semantic search and keyword matching"""
+        if not query or not query.strip():
+            return []
+        
+        try:
+            # Get all chunks
+            all_results = self.collection.get(
+                include=['documents', 'metadatas']
+            )
+            
+            if not all_results or not all_results.get('documents'):
+                return []
+            
+            # Extract keywords from query
+            keywords = query.lower().replace('?', '').replace(',', '').split()
+            # Remove common words
+            stopwords = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'what', 'how', 'when', 'where', 'who', 'give', 'me', 'for', 'all', 'each', 'of', 'to', 'in', 'and', 'or', 'tell'}
+            keywords = [k for k in keywords if k not in stopwords and len(k) > 2]
+            
+            # Score chunks by keyword matches
+            keyword_matches = []
+            for i, doc in enumerate(all_results['documents']):
+                score = sum(1 for keyword in keywords if keyword in doc.lower())
+                if score > 0:
+                    keyword_matches.append({
+                        'text': doc,
+                        'metadata': all_results['metadatas'][i],
+                        'keyword_score': score,
+                        'distance': 1.0 - (score / max(len(keywords), 1))
+                    })
+            
+            # Sort by keyword score
+            keyword_matches.sort(key=lambda x: x['keyword_score'], reverse=True)
+            
+            # Get semantic matches
+            semantic_chunks = self.retrieve(query, n_results=n_results // 2)
+            
+            # Combine and deduplicate
+            seen_texts = set()
+            combined = []
+            
+            # Add keyword matches first (they're often more precise)
+            for chunk in keyword_matches[:n_results // 2]:
+                text_key = chunk['text'][:100]
+                if text_key not in seen_texts:
+                    seen_texts.add(text_key)
+                    combined.append(chunk)
+            
+            # Add semantic matches
+            for chunk in semantic_chunks:
+                text_key = chunk['text'][:100]
+                if text_key not in seen_texts:
+                    seen_texts.add(text_key)
+                    combined.append(chunk)
+            
+            print(f"Hybrid retrieval: {len(keyword_matches)} keyword matches + {len(semantic_chunks)} semantic matches = {len(combined)} total")
+            return combined[:n_results]
+            
+        except Exception as e:
+            print(f"Error in hybrid retrieval: {e}")
+            traceback.print_exc()
+            return self.retrieve(query, n_results)
+    
+    def retrieve(self, query: str, n_results: int = 100) -> List[Dict]:
+        """Retrieve relevant chunks"""
         if not query or not query.strip():
             return []
         
         try:
             query_embedding = self.embedder.encode(query).tolist()
             
+            total_chunks = self.collection.count()
+            actual_n = min(n_results, total_chunks)
+            
             results = self.collection.query(
                 query_embeddings=[query_embedding],
-                n_results=n_results,
+                n_results=actual_n,
                 include=['documents', 'metadatas', 'distances']
             )
             
@@ -314,53 +408,72 @@ class SemanticFinancialRAG:
             print(f"Error retrieving: {e}")
             return []
     
-    def generate_answer(self, query: str, n_results: int = 50) -> str:
-        """Generate answer using Claude - increased default to 50 chunks"""
+    def generate_answer(self, query: str, n_results: int = 100) -> str:
+        """Generate answer using Claude with hybrid retrieval"""
         print(f"\nQuery: {query}")
         
         if not query or not query.strip():
             return "Please provide a valid question."
         
         try:
-            chunks = self.retrieve(query, n_results=n_results)
+            # Use hybrid retrieval (semantic + keyword)
+            chunks = self.retrieve_with_keywords(query, n_results=n_results)
             
             if not chunks:
                 return "No relevant information found. Please upload documents first."
             
-            print(f"Retrieved {len(chunks)} chunks")
+            print(f"Retrieved {len(chunks)} total chunks")
             
-            context_parts = []
+            # Group chunks by source
+            chunks_by_source = {}
             for chunk in chunks:
                 source = chunk['metadata'].get('source', 'Unknown')
-                page = chunk['metadata'].get('page', 'Unknown')
-                chunk_type = chunk['metadata'].get('type', 'Unknown')
-                text = chunk.get('text', '')
-                
-                context_parts.append(
-                    f"[Source: {source}, Page: {page}, Type: {chunk_type}]\n{text}"
-                )
+                if source not in chunks_by_source:
+                    chunks_by_source[source] = []
+                chunks_by_source[source].append(chunk)
+            
+            print(f"Chunks organized across {len(chunks_by_source)} documents")
+            
+            # Build context organized by source
+            context_parts = []
+            for source, source_chunks in chunks_by_source.items():
+                context_parts.append(f"\n=== Document: {source} ===")
+                # Take top chunks per source
+                for chunk in source_chunks[:50]:
+                    page = chunk['metadata'].get('page', '?')
+                    chunk_type = chunk['metadata'].get('type', '?')
+                    text = chunk.get('text', '')
+                    
+                    context_parts.append(
+                        f"[Page {page}, Type: {chunk_type}]\n{text}"
+                    )
             
             context = "\n\n---\n\n".join(context_parts)
             
-            prompt = f"""You are a financial analyst assistant. Answer based on the context from earnings reports.
+            # Enhanced prompt
+            prompt = f"""You are a financial analyst assistant. Answer the question based on the context from earnings reports.
 
-Context:
+CRITICAL INSTRUCTIONS:
+1. The context below contains information from MULTIPLE companies
+2. Search through ALL documents and ALL pages provided
+3. Answer for EVERY company that has relevant data
+4. Create a comprehensive table comparing all companies
+5. Cite the source filename and page number for each data point
+6. If a company's data is not in the context, state "Data not found in documents"
+
+Context from all documents:
 {context}
 
 Question: {query}
 
-Instructions:
-- Answer directly and concisely
-- Cite source and page for numbers
-- Use tables for multiple companies
-- Say if info is missing
+Provide a thorough answer that covers all companies found in the context.
 
 Answer:"""
             
             print("Calling Claude...")
             message = self.claude.messages.create(
                 model="claude-sonnet-4-20250514",
-                max_tokens=2000,
+                max_tokens=4000,
                 messages=[{"role": "user", "content": prompt}]
             )
             
