@@ -27,8 +27,8 @@ class SemanticFinancialRAG:
         self.embedder = SentenceTransformer(model_name)
         
         # Simple chunking parameters - smaller for better granularity
-        self.chunk_size = 500  # Reduced from 800
-        self.chunk_overlap = 100  # Reduced from 150
+        self.chunk_size = 500
+        self.chunk_overlap = 100
         
         # Initialize ChromaDB
         print("Initializing ChromaDB...")
@@ -40,16 +40,43 @@ class SemanticFinancialRAG:
             )
         )
         
-        # Create or get collection
+        self.collection_name = collection_name
+        
+        # Create or get collection - with better error handling
         try:
             self.collection = self.client.get_collection(name=collection_name)
             print(f"Loaded existing collection: {collection_name}")
-        except:
-            self.collection = self.client.create_collection(
-                name=collection_name,
-                metadata={"hnsw:space": "cosine"}
-            )
-            print(f"Created new collection: {collection_name}")
+            # Verify collection is accessible
+            try:
+                self.collection.count()
+            except Exception as e:
+                print(f"Collection exists but is corrupted, recreating: {e}")
+                self.client.delete_collection(name=collection_name)
+                self.collection = self.client.create_collection(
+                    name=collection_name,
+                    metadata={"hnsw:space": "cosine"}
+                )
+                print(f"Created new collection: {collection_name}")
+        except Exception as e:
+            print(f"Collection does not exist, creating new one: {e}")
+            try:
+                self.collection = self.client.create_collection(
+                    name=collection_name,
+                    metadata={"hnsw:space": "cosine"}
+                )
+                print(f"Created new collection: {collection_name}")
+            except Exception as create_error:
+                print(f"Failed to create collection, trying to reset: {create_error}")
+                # Last resort - delete all and recreate
+                try:
+                    self.client.delete_collection(name=collection_name)
+                except:
+                    pass
+                self.collection = self.client.create_collection(
+                    name=collection_name,
+                    metadata={"hnsw:space": "cosine"}
+                )
+                print(f"Reset and created collection: {collection_name}")
         
         # Initialize Anthropic client
         api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -206,9 +233,12 @@ class SemanticFinancialRAG:
         """Ingest multiple PDFs into ChromaDB with optimized batching"""
         if clear_existing:
             print("Clearing existing collection...")
-            self.client.delete_collection(name=self.collection.name)
+            try:
+                self.client.delete_collection(name=self.collection_name)
+            except:
+                pass
             self.collection = self.client.create_collection(
-                name=self.collection.name,
+                name=self.collection_name,
                 metadata={"hnsw:space": "cosine"}
             )
         
@@ -285,7 +315,10 @@ class SemanticFinancialRAG:
                 print(f"\nError processing {pdf_path}: {e}")
                 traceback.print_exc()
         
-        print(f"\n✓ Total chunks in collection: {self.collection.count()}")
+        try:
+            print(f"\n✓ Total chunks in collection: {self.collection.count()}")
+        except Exception as e:
+            print(f"Warning: Could not get collection count: {e}")
     
     def search_all_files(self, keyword: str) -> List[Dict]:
         """Search for a specific keyword across all files"""
@@ -485,17 +518,28 @@ Answer:"""
             return f"Error: {str(e)}"
     
     def get_stats(self) -> Dict:
-        """Get collection stats"""
+        """Get collection stats with error handling"""
         try:
+            count = self.collection.count()
             return {
-                'total_chunks': self.collection.count(),
-                'collection_name': self.collection.name
+                'total_chunks': count,
+                'collection_name': self.collection_name
             }
         except Exception as e:
+            print(f"Error getting stats, recreating collection: {e}")
+            # Collection is broken, recreate it
+            try:
+                self.client.delete_collection(name=self.collection_name)
+            except:
+                pass
+            self.collection = self.client.create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": "cosine"}
+            )
             return {
                 'total_chunks': 0,
-                'collection_name': self.collection.name,
-                'error': str(e)
+                'collection_name': self.collection_name,
+                'status': 'recreated'
             }
 
 
