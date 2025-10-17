@@ -119,6 +119,7 @@ with st.sidebar:
                 st.session_state.rag_system = rag
                 st.session_state.initialization_error = None
                 st.success("✅ System initialized!")
+                st.rerun()  # Force rerun to update slider
             else:
                 st.session_state.rag_system = None
                 st.session_state.initialization_error = error
@@ -148,7 +149,16 @@ with st.sidebar:
     
     # Settings
     st.header("🎛️ Settings")
-    n_results = st.slider("Chunks to retrieve", 5, 50, 30)
+    
+    # UPDATED SLIDER - THIS IS THE KEY CHANGE
+    n_results = st.slider(
+        "Number of chunks to retrieve",
+        min_value=20,
+        max_value=200,
+        value=100,
+        step=10,
+        help="More chunks = better coverage but slower. Recommended: 100-150"
+    )
     
     st.markdown("---")
     
@@ -267,6 +277,8 @@ with col2:
         if ask_button and query and query.strip():
             with st.spinner("🤔 Thinking..."):
                 try:
+                    st.info(f"📊 Retrieving {n_results} chunks...")
+                    
                     answer = st.session_state.rag_system.generate_answer(
                         query, 
                         n_results=n_results
@@ -277,7 +289,8 @@ with col2:
                     st.session_state.chat_history.append({
                         'question': query,
                         'answer': answer,
-                        'sources': chunks
+                        'sources': chunks,
+                        'n_results': n_results
                     })
                     
                 except Exception as e:
@@ -296,11 +309,13 @@ if st.session_state.chat_history:
             st.info(chat['question'])
             
             st.markdown(f"### 🤖 Answer")
+            chunks_used = chat.get('n_results', 'Unknown')
+            st.caption(f"📊 Used {chunks_used} chunks")
             st.success(chat['answer'])
             
             if chat.get('sources'):
                 with st.expander(f"📚 Sources ({len(chat['sources'])})"):
-                    for i, source in enumerate(chat['sources'], 1):
+                    for i, source in enumerate(chat['sources'][:20], 1):  # Show first 20
                         try:
                             st.markdown(f"**Source {i}**")
                             st.markdown(f"*File:* `{source['metadata'].get('source', '?')}`")
@@ -318,6 +333,6 @@ if st.session_state.chat_history:
 st.markdown("---")
 st.markdown("""
     <div style='text-align: center; color: #666;'>
-        <p>Powered by Claude AI & ChromaDB</p>
+        <p>Powered by Claude AI & ChromaDB | Retrieves up to 200 chunks</p>
     </div>
 """, unsafe_allow_html=True)
